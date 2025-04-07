@@ -1,9 +1,11 @@
 import requests
 import json
+import pandas as pd
 from datetime import datetime
 import time
 import urllib.parse
 import sys
+import os
 
 # API key
 API_KEY = input("Lütfen geçerli bir Riot API keyi girin: ")
@@ -93,6 +95,99 @@ def get_match_details(match_id):
         return None
     return response.json()
 
+def extract_player_data(match_data, puuid):
+    """Belirli bir oyuncunun bir maçtaki verilerini çıkarır."""
+    match_id = match_data['metadata']['matchId']
+    game_creation = match_data['info']['gameCreation']
+    game_duration = match_data['info']['gameDuration']
+    game_duration_minutes = game_duration / 60
+    queue_id = match_data['info']['queueId']
+    
+    # Oyuncuyu bul
+    player_data = None
+    for participant in match_data['info']['participants']:
+        if participant.get('puuid') == puuid:
+            player_data = participant
+            break
+    
+    if not player_data:
+        print(f"PUUID {puuid} maç {match_id} içinde bulunamadı, bu maç atlanıyor.")
+        return None
+    
+    # Temel özellikleri çıkar
+    extracted_data = {
+        'match_id': match_id,
+        'game_creation': game_creation,
+        'game_duration': game_duration,
+        'game_duration_minutes': game_duration_minutes,
+        'queue_id': queue_id,
+        'win': 1 if player_data.get('win', False) else 0,
+        'champion': player_data.get('championName', ''),
+        'position': player_data.get('teamPosition', ''),
+        'kills': player_data.get('kills', 0),
+        'deaths': player_data.get('deaths', 0),
+        'assists': player_data.get('assists', 0),
+        'kda': compute_kda(player_data.get('kills', 0), player_data.get('deaths', 0), player_data.get('assists', 0)),
+        'champion_level': player_data.get('champLevel', 0),
+        'vision_score': player_data.get('visionScore', 0),
+        'vision_wards_bought': player_data.get('visionWardsBoughtInGame', 0),
+        'wards_placed': player_data.get('wardsPlaced', 0),
+        'wards_killed': player_data.get('wardsKilled', 0),
+        'first_blood': 1 if player_data.get('firstBloodKill', False) or player_data.get('firstBloodAssist', False) else 0,
+        'gold_earned': player_data.get('goldEarned', 0),
+        'total_damage_dealt': player_data.get('totalDamageDealt', 0),
+        'total_damage_to_champions': player_data.get('totalDamageDealtToChampions', 0),
+        'total_damage_taken': player_data.get('totalDamageTaken', 0),
+        'objective_damage': player_data.get('damageDealtToObjectives', 0),
+        'turret_kills': player_data.get('turretKills', 0),
+        'inhibitor_kills': player_data.get('inhibitorKills', 0),
+        'total_minions_killed': player_data.get('totalMinionsKilled', 0) + player_data.get('neutralMinionsKilled', 0),
+        'neutral_minions_killed': player_data.get('neutralMinionsKilled', 0),
+    }
+    
+    # KDA ve diğer oranları hesapla
+    extracted_data['cs_per_minute'] = extracted_data['total_minions_killed'] / game_duration_minutes if game_duration_minutes > 0 else 0
+    extracted_data['damage_per_minute'] = extracted_data['total_damage_to_champions'] / game_duration_minutes if game_duration_minutes > 0 else 0
+    
+    # Takım bazlı istatistikleri hesapla
+    team_id = player_data.get('teamId', 0)
+    team_kills = 0
+    for p in match_data['info']['participants']:
+        if p.get('teamId', 0) == team_id:
+            team_kills += p.get('kills', 0)
+    
+    # Kill katılım oranı
+    extracted_data['kill_participation'] = (extracted_data['kills'] + extracted_data['assists']) / team_kills if team_kills > 0 else 0
+    
+    return extracted_data
+
+def compute_kda(kills, deaths, assists):
+    """KDA hesaplar (K+A)/D"""
+    if deaths == 0:
+        return (kills + assists)  # Ölmeden bitmişse deaths 0 olduğu için bölünemez
+    return (kills + assists) / deaths
+
+def convert_to_csv(matches_data, puuid, csv_filename):
+    """Maç verilerini CSV formatına dönüştürür"""
+    print("Veriler CSV formatına dönüştürülüyor...")
+    
+    # Tüm maçlardan oyuncu verilerini çıkar
+    player_matches = []
+    for match in matches_data:
+        player_match = extract_player_data(match, puuid)
+        if player_match:
+            player_matches.append(player_match)
+    
+    print(f"İşlenen maç sayısı: {len(player_matches)}")
+    
+    df = pd.DataFrame(player_matches)
+    
+    df = df.sort_values('game_creation', ascending=False)
+    
+    # CSV'ye kaydet
+    df.to_csv(csv_filename, index=False)
+    print(f"Veriler {csv_filename} dosyasına kaydedildi!")
+
 def main():
     # Adım 1: Riot ID'den hesap bilgilerini al (PUUID dahil)
     print(f"Riot ID için bilgiler: {GAME_NAME}#{TAG_LINE}")
@@ -149,10 +244,20 @@ def main():
     # Adım 5: Verileri dosyaya kaydet
     if matches_data:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"matches_{GAME_NAME.replace(' ', '_')}_{timestamp}.json"
-        with open(filename, 'w', encoding='utf-8') as f:
+        json_filename = f"matches_{GAME_NAME.replace(' ', '_')}_{timestamp}.json"
+        csv_filename = f"player_matches_{GAME_NAME.replace(' ', '_')}_{timestamp}.csv"
+        
+        # JSON olarak kaydet
+        with open(json_filename, 'w', encoding='utf-8') as f:
             json.dump(matches_data, f, ensure_ascii=False, indent=2)
-        print(f"Veriler {filename} dosyasına kaydedildi!")
+        print(f"Ham veriler {json_filename} dosyasına kaydedildi!")
+        
+        # CSV olarak da kaydet
+        try:
+            convert_to_csv(matches_data, puuid, csv_filename)
+        except Exception as e:
+            print(f"CSV dönüşümü sırasında hata: {e}")
+            print("CSV oluşturma başarısız oldu, ama JSON veriler kaydedildi.")
     else:
         print("Hiç maç verisi toplanamadı")
 
