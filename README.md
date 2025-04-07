@@ -73,7 +73,3 @@ matches_[OYUNCU_ADI]_[ZAMAN_DAMGASI].json
 - **"Error fetching account by Riot ID":** Hesap adı veya tag hatalı olabilir
 - **"Error fetching match history":** API Key geçersiz veya süresi dolmuş olabilir
 - **"PUUID bulunamadı":** Hesap bulunamadı veya API yanıtında beklenen veri yok
-
-## Lisans
-
-MIT lisansı altında lisanslanmıştır. 
